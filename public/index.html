@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuizLive</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #0a0a0a; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .screen { display: none; flex-direction: column; align-items: center; gap: 20px; width: 100%; max-width: 480px; padding: 24px; }
+    .screen.active { display: flex; }
+    h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -1px; }
+    h2 { font-size: 1.4rem; font-weight: 600; }
+    input { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 1rem; }
+    button { width: 100%; padding: 14px; border-radius: 8px; border: none; background: #6400CF; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+    button:hover { opacity: 0.85; }
+    .or { color: #555; font-size: 0.9rem; }
+    .answer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; }
+    .answer-btn { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 16px; cursor: pointer; color: #fff; font-size: 0.95rem; transition: background 0.2s; }
+    .answer-btn:hover { background: #2a2a2a; }
+    .answer-btn.correct { background: #1a5c2a; border-color: #2ecc71; }
+    .answer-btn.wrong { background: #5c1a1a; border-color: #e74c3c; }
+    .score-box { font-size: 3rem; font-weight: 700; color: #6400CF; }
+    .leaderboard { width: 100%; }
+    .leaderboard-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #222; font-size: 0.95rem; }
+    .leaderboard-row:first-child { color: #FFD700; }
+    #question-text { font-size: 1.2rem; text-align: center; line-height: 1.5; }
+    #timer { font-size: 2rem; font-weight: 700; color: #6400CF; }
+  </style>
+</head>
+<body>
+
+<!-- Join screen -->
+<div class="screen active" id="screen-join">
+  <h1>QuizLive</h1>
+  <input id="input-session" placeholder="Session code" />
+  <input id="input-name" placeholder="Your name" />
+  <button onclick="joinSession()">Join →</button>
+  <span class="or">or</span>
+  <button onclick="showHost()" style="background:#1a1a1a;border:1px solid #333;">Host a quiz</button>
+</div>
+
+<!-- Lobby screen -->
+<div class="screen" id="screen-lobby">
+  <h2>Waiting for host...</h2>
+  <p id="lobby-name"></p>
+  <p style="color:#555;font-size:0.85rem;">Session: <span id="lobby-session"></span></p>
+</div>
+
+<!-- Question screen -->
+<div class="screen" id="screen-question">
+  <div id="timer">--</div>
+  <p id="question-text"></p>
+  <div class="answer-grid" id="answer-grid"></div>
+</div>
+
+<!-- Result screen -->
+<div class="screen" id="screen-result">
+  <h2>Answer result</h2>
+  <div class="score-box" id="result-points"></div>
+  <p id="result-text"></p>
+  <div class="leaderboard" id="leaderboard"></div>
+</div>
+
+<!-- Host screen -->
+<div class="screen" id="screen-host">
+  <h2>Host Panel</h2>
+  <p style="color:#555;font-size:0.85rem;">Session: <span id="host-session-id"></span></p>
+  <p>Participants: <span id="host-participant-count">0</span></p>
+  <button onclick="nextSlide()">Next slide →</button>
+  <div class="leaderboard" id="host-leaderboard"></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  let currentSessionId = null;
+  let answerSentAt = null;
+
+  function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  function joinSession() {
+    const sessionId = document.getElementById('input-session').value.trim();
+    const name = document.getElementById('input-name').value.trim();
+    if (!sessionId || !name) return alert('Fill in session code and name');
+    currentSessionId = sessionId;
+    socket.emit('join_session', { sessionId, name });
+  }
+
+  function showHost() {
+    const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    currentSessionId = sessionId;
+    const slides = [
+      { type: 'multiple_choice', question: 'What is the capital of France?', options: ['Berlin', 'Madrid', 'Paris', 'Rome'], correct: 'Paris' },
+      { type: 'multiple_choice', question: 'What is 2 + 2?', options: ['3', '4', '5', '6'], correct: '4' },
+      { type: 'poll', question: 'Favorite season?', options: ['Spring', 'Summer', 'Autumn', 'Winter'] },
+    ];
+    socket.emit('create_session', { sessionId, slides });
+  }
+
+  function nextSlide() {
+    socket.emit('next_slide', { sessionId: currentSessionId });
+  }
+
+  function submitAnswer(answer) {
+    const timeMs = Date.now() - answerSentAt;
+    document.querySelectorAll('.answer-btn').forEach(b => b.disabled = true);
+    socket.emit('submit_answer', { sessionId: currentSessionId, answer, timeMs });
+  }
+
+  function renderLeaderboard(leaderboard, containerId) {
+    const el = document.getElementById(containerId);
+    el.innerHTML = leaderboard.map((p, i) =>
+      `<div class="leaderboard-row"><span>${i + 1}. ${p.name}</span><span>${p.score} pts</span></div>`
+    ).join('');
+  }
+
+  // Socket events
+  socket.on('session_created', ({ sessionId }) => {
+    document.getElementById('host-session-id').textContent = sessionId;
+    showScreen('screen-host');
+  });
+
+  socket.on('joined', ({ name, sessionId }) => {
+    document.getElementById('lobby-name').textContent = `Hi, ${name}!`;
+    document.getElementById('lobby-session').textContent = sessionId;
+    showScreen('screen-lobby');
+  });
+
+  socket.on('participant_joined', ({ name, count }) => {
+    document.getElementById('host-participant-count').textContent = count;
+  });
+
+  socket.on('slide_changed', ({ slide }) => {
+    answerSentAt = Date.now();
+    document.getElementById('question-text').textContent = slide.question;
+    const grid = document.getElementById('answer-grid');
+    grid.innerHTML = slide.options.map(opt =>
+      `<button class="answer-btn" onclick="submitAnswer('${opt}')">${opt}</button>`
+    ).join('');
+    showScreen('screen-question');
+  });
+
+  socket.on('answer_result', ({ correct, points }) => {
+    document.getElementById('result-points').textContent = correct ? `+${points}` : '0';
+    document.getElementById('result-text').textContent = correct ? 'Correct!' : 'Wrong answer';
+    showScreen('screen-result');
+  });
+
+  socket.on('leaderboard_update', ({ leaderboard }) => {
+    renderLeaderboard(leaderboard, 'leaderboard');
+    renderLeaderboard(leaderboard, 'host-leaderboard');
+  });
+
+  socket.on('error', ({ message }) => alert(message));
+</script>
+</body>
+</html>
